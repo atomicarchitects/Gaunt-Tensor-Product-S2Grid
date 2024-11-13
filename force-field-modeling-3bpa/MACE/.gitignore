@@ -7,3 +7,7 @@
 # IDE
 .idea/
 .vscode/
+
+*.pyc
+build
+MACE.egg-info

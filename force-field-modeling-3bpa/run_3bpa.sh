@@ -25,5 +25,6 @@ python3 ./MACE/scripts/run_train.py \
     --ema \
     --ema_decay=0.99 \
     --scaling='rms_forces_scaling' \
-    --restart_latest \
     --amsgrad \
+    # --restart_latest \
+    # --amsgrad \
