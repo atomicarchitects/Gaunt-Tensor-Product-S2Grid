@@ -156,6 +156,7 @@ class GauntTensorProductS2Grid(nn.Module):
         irreps_out: o3.Irreps,
         res_beta: Optional[int] = None,
         res_alpha: Optional[int] = None,
+        device: Optional[torch.device] = None,
     ):
         super().__init__()
 
@@ -171,14 +172,17 @@ class GauntTensorProductS2Grid(nn.Module):
         self.to_s2grid1 = o3.ToS2Grid(
             lmax=self.irreps_in1.lmax,
             res=(res_beta, res_alpha),
+            device=device,
         )
         self.to_s2grid2 = o3.ToS2Grid(
             lmax=self.irreps_in2.lmax,
             res=(res_beta, res_alpha),
+            device=device,
         )
         self.from_s2grid = o3.FromS2Grid(
             lmax=self.irreps_out.lmax,
             res=(res_beta, res_alpha),
+            device=device,
         )
     
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
@@ -196,111 +200,6 @@ class GauntTensorProductS2Grid(nn.Module):
         return output
 
 
-
-class EfficientMultiTensorProductGauntS2Grid(nn.Module):
-
-    def __init__(
-        self,
-        irreps_in: o3.Irreps,
-        irreps_out: o3.Irreps,
-        correlation: int,
-        num_elements: int,
-        device: str,
-    ):
-        super().__init__()
-
-        self.irreps_in = o3.Irreps(irreps_in)
-        self.irreps_out = o3.Irreps(irreps_out)
-        self.num_channels = irreps_in.count((0, 1))
-        self.num_elements = num_elements
-        self.irreps_in_per_channel = o3.Irreps([(mul // self.num_channels, ir) for mul, ir in self.irreps_in])
-        self.irreps_out_per_channel = o3.Irreps([(mul // self.num_channels, ir) for mul, ir in self.irreps_out])
-        del irreps_in, irreps_out
-        self.correlation = correlation
-        self.device = device
-
-        L_in = self.irreps_in.lmax + 1
-        L_out = self.irreps_out.lmax + 1
-        self.L_in = L_in
-        self.L_out = L_out
-
-        self.weights = nn.ParameterDict({})
-        self.weight_repeats = torch.concatenate([torch.as_tensor(ir.dim).repeat(mul) for mul, ir in self.irreps_out_per_channel]).to(device)
-        # debug("weight_repeats", self.weight_repeats)
-
-        for i in range(1, correlation + 1):
-            w = nn.Parameter(
-                torch.randn(1, self.num_elements, self.num_channels, self.L_out)
-            )
-            self.weights[str(i)] = w
-
-        self.gaunt_s2grid = nn.ModuleDict({})
-        for nu in range(1, correlation):
-            self.gaunt_s2grid[str(nu)] = GauntTensorProductS2Grid(
-                irreps_in1=o3.Irreps.spherical_harmonics(nu * self.irreps_in_per_channel.lmax),
-                irreps_in2=self.irreps_in_per_channel,
-                irreps_out=o3.Irreps.spherical_harmonics((nu + 1) * self.irreps_in_per_channel.lmax),
-            )
-        self.equivarianced_checked = False
-
-        self.slices = 2 * torch.arange(L_out, device=device) + 1
-        self.slices = self.slices.tolist()
-
-    def forward(self, atom_feat: torch.tensor, atom_type: torch.Tensor):
-        if not self.equivarianced_checked:
-            self.equivarianced_checked = True
-            e3nn.util.test.assert_equivariant(
-                self.forward,
-                args_in=[atom_feat, atom_type],
-                irreps_in=[self.irreps_in_per_channel, f"{self.num_elements}x0e"],
-                irreps_out=[self.irreps_out],
-            )
-    
-        # atom_feat: (B, C, )
-        # debug("inputs", atom_feat.shape, atom_type.shape)
-
-        # Perform Efficient Gaunt TP
-        batch_size, num_channels, _ = atom_feat.shape
-        result = torch.zeros((batch_size, num_channels, self.irreps_out_per_channel.dim), device=self.device)
-        # debug("result", result.shape)
-        # debug("irreps_out_per_channel", self.irreps_out_per_channel.dim)
-        prod = atom_feat
-
-        for nu in range(1, self.correlation + 1):
-            # Compute weights for this iteration.
-            weights = (self.weights[str(nu)] * atom_type.unsqueeze(-1).unsqueeze(-1)).sum(1)
-            # The weights are of shape: (B, C, self.irreps_out_per_channel.num_irreps)
-            # Repeat the weights for each dimension of the output irreps.
-            weights = weights.repeat_interleave(self.weight_repeats, dim=-1)
-            # The weights are now of shape: (B, C, self.irreps_out_per_channel.output_dim)
-
-            # Mix in weights, and add to current result.
-            result += weights * prod[:, :, :result.shape[-1]]
-
-            # Perform product.
-            if nu < self.correlation:
-                # debug("nu", nu)
-                # debug("prod", prod.shape)
-                # debug("atom_feat", atom_feat.shape)
-                # debug(self.gaunt_s2grid[str(nu)].irreps_in1, self.gaunt_s2grid[str(nu)].irreps_in1.dim)
-                # debug(self.gaunt_s2grid[str(nu)].irreps_in2, self.gaunt_s2grid[str(nu)].irreps_in2.dim)
-                # debug(self.gaunt_s2grid[str(nu)].irreps_out, self.gaunt_s2grid[str(nu)].irreps_out.dim)
-                # print("full_prod", full_prod.shape)
-                # print(self.gaunt_s2grid_opt.irreps_in1, self.gaunt_s2grid_opt.irreps_in1.dim)
-                # print("full_atom_feat", full_atom_feat.shape)
-                # print(self.gaunt_s2grid_opt.irreps_in2, self.gaunt_s2grid_opt.irreps_in2.dim)
-                prod = self.gaunt_s2grid[str(nu)](prod, atom_feat)
-                # full_prod = self.gaunt_s2grid_opt(full_prod, full_atom_feat)
-
-        # Convert to 2D.
-        irreps = torch.split(result, self.slices, dim=-1)
-        irreps_flatten = list(map(lambda x: x.flatten(start_dim=1), irreps))
-        result2D = torch.cat(irreps_flatten, dim=-1)
-        return result2D
-
-
-
-
 # @e3nn.util.jit.compile_mode('trace')
 class VectorGauntTensorProductS2Grid(nn.Module):
     """S2 grid version of GauntTensorProduct."""
@@ -312,6 +211,7 @@ class VectorGauntTensorProductS2Grid(nn.Module):
         irreps_out: o3.Irreps,
         res_beta: Optional[int] = None,
         res_alpha: Optional[int] = None,
+        device: Optional[torch.device] = None,
     ):
         super().__init__()
 
@@ -319,26 +219,33 @@ class VectorGauntTensorProductS2Grid(nn.Module):
         self.irreps_in2 = o3.Irreps(irreps_in2)
         self.irreps_out = o3.Irreps(irreps_out)
 
-        lmax = self.irreps_in1.lmax
+        lmax = max(self.irreps_in1.lmax, self.irreps_in2.lmax, self.irreps_out.lmax)
         if res_beta is None or res_alpha is None:
             res_beta = 2 * (lmax + 1)
             res_alpha = 2 * lmax + 1
 
-        self.vsh1 = VectorSphericalHarmonics(lmax=self.irreps_in1.lmax, res_beta=res_beta, res_alpha=res_alpha)
-        self.vsh2 = VectorSphericalHarmonics(lmax=self.irreps_in2.lmax, res_beta=res_beta, res_alpha=res_alpha)
-        self.vsh_out = VectorSphericalHarmonics(lmax=self.irreps_out.lmax, res_beta=res_beta, res_alpha=res_alpha)
+        self.vsh1 = VectorSphericalHarmonics(lmax=self.irreps_in1.lmax - 1, res_beta=res_beta, res_alpha=res_alpha, device=device)
+        self.linear1 = e3nn.o3.Linear(irreps_in=self.irreps_in1, irreps_out=self.vsh1.vsh_irreps)
+
+        self.vsh2 = VectorSphericalHarmonics(lmax=self.irreps_in2.lmax - 1, res_beta=res_beta, res_alpha=res_alpha, device=device)
+        self.linear2 = e3nn.o3.Linear(irreps_in=self.irreps_in2, irreps_out=self.vsh2.vsh_irreps)
+
+        self.vsh_out = VectorSphericalHarmonics(lmax=self.irreps_out.lmax - 1, res_beta=res_beta, res_alpha=res_alpha, device=device)
+        self.linear_out = e3nn.o3.Linear(irreps_in=self.vsh_out.vsh_irreps, irreps_out=self.irreps_out)
 
 
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
+        input1 = self.linear1(input1)
+        input2 = self.linear2(input2)
         input1_signal = self.vsh1.to_vector_signal(input1)
         input2_signal = self.vsh2.to_vector_signal(input2)
         output_signal = torch.cross(input1_signal, input2_signal, dim=-3)
         output = self.vsh_out.from_vector_signal(output_signal)
+        output = self.linear_out(output)
         return output
 
 
-
-class EfficientMultiTensorProductVectorGauntS2Grid(nn.Module):
+class EfficientMultiTensorProductS2Grid(nn.Module):
 
     def __init__(
         self,
@@ -347,6 +254,7 @@ class EfficientMultiTensorProductVectorGauntS2Grid(nn.Module):
         correlation: int,
         num_elements: int,
         device: str,
+        use_vector_spherical_harmonics: bool,
     ):
         super().__init__()
 
@@ -375,17 +283,23 @@ class EfficientMultiTensorProductVectorGauntS2Grid(nn.Module):
             )
             self.weights[str(i)] = w
 
-        self.gaunt_s2grid = nn.ModuleDict({})
+        if use_vector_spherical_harmonics:
+            tp = VectorGauntTensorProductS2Grid
+        else:
+            tp = GauntTensorProductS2Grid
+
+        self.tps = nn.ModuleDict({})
         for nu in range(1, correlation):
-            self.gaunt_s2grid[str(nu)] = VectorGauntTensorProductS2Grid(
+            self.tps[str(nu)] = tp(
                 irreps_in1=o3.Irreps.spherical_harmonics(nu * self.irreps_in_per_channel.lmax),
                 irreps_in2=self.irreps_in_per_channel,
                 irreps_out=o3.Irreps.spherical_harmonics((nu + 1) * self.irreps_in_per_channel.lmax),
+                device=device,
             )
-        self.equivarianced_checked = False
 
         self.slices = 2 * torch.arange(L_out, device=device) + 1
         self.slices = self.slices.tolist()
+        self.equivarianced_checked = True
 
     def forward(self, atom_feat: torch.tensor, atom_type: torch.Tensor):
         if not self.equivarianced_checked:
@@ -420,21 +334,11 @@ class EfficientMultiTensorProductVectorGauntS2Grid(nn.Module):
 
             # Perform product.
             if nu < self.correlation:
-                # debug("nu", nu)
-                # debug("prod", prod.shape)
-                # debug("atom_feat", atom_feat.shape)
-                # debug(self.gaunt_s2grid[str(nu)].irreps_in1, self.gaunt_s2grid[str(nu)].irreps_in1.dim)
-                # debug(self.gaunt_s2grid[str(nu)].irreps_in2, self.gaunt_s2grid[str(nu)].irreps_in2.dim)
-                # debug(self.gaunt_s2grid[str(nu)].irreps_out, self.gaunt_s2grid[str(nu)].irreps_out.dim)
-                # print("full_prod", full_prod.shape)
-                # print(self.gaunt_s2grid_opt.irreps_in1, self.gaunt_s2grid_opt.irreps_in1.dim)
-                # print("full_atom_feat", full_atom_feat.shape)
-                # print(self.gaunt_s2grid_opt.irreps_in2, self.gaunt_s2grid_opt.irreps_in2.dim)
-                prod = self.gaunt_s2grid[str(nu)](prod, atom_feat)
-                # full_prod = self.gaunt_s2grid_opt(full_prod, full_atom_feat)
+                prod = self.tps[str(nu)](prod, atom_feat)
 
         # Convert to 2D.
         irreps = torch.split(result, self.slices, dim=-1)
         irreps_flatten = list(map(lambda x: x.flatten(start_dim=1), irreps))
         result2D = torch.cat(irreps_flatten, dim=-1)
         return result2D
+

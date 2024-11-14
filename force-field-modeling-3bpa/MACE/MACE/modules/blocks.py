@@ -9,7 +9,7 @@ from opt_einsum import contract
 
 
 from MACE.tools.torch_tools import get_complex_default_dtype
-from .efficient_multi_tensor_product import EfficientMultiTensorProduct, EfficientMultiTensorProductGauntS2Grid
+from .efficient_multi_tensor_product import EfficientMultiTensorProduct, EfficientMultiTensorProductS2Grid
 
 from .irreps_tools import (
     linear_out_irreps,
@@ -214,12 +214,13 @@ class EquivariantProductBasisBlock(torch.nn.Module):
         super().__init__()
         self.use_complex = use_complex
         self.use_sc = use_sc
-        self.efficient_multi_tensorproduct = EfficientMultiTensorProductGauntS2Grid(
+        self.efficient_multi_tensorproduct = EfficientMultiTensorProductS2Grid(
             irreps_in=node_feats_irreps,
             irreps_out=target_irreps,
             correlation=correlation,
             num_elements=num_elements,
             device=device,
+            use_vector_spherical_harmonics=True,
         )
         # Update linear
         self.linear = o3.Linear(

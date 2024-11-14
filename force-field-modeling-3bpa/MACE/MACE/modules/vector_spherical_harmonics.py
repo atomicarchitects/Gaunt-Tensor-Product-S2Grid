@@ -1,4 +1,4 @@
-from typing import Tuple, Callable
+from typing import Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -11,9 +11,9 @@ def get_change_of_basis_matrix(lmax: int) -> Tuple[torch.Tensor, e3nn.o3.Irreps]
 
 
 class VectorSphericalHarmonics(nn.Module):
-    """Barebones implementation of vector spherical harmonics."""
+    """Barebones implementation of the vector spherical harmonics."""
 
-    def __init__(self, lmax: int, res_beta: int, res_alpha: int) -> None:
+    def __init__(self, lmax: int, res_beta: int, res_alpha: int, device: Optional[torch.device] = None) -> None:
         super().__init__()
 
         self.lmax = lmax
@@ -21,8 +21,9 @@ class VectorSphericalHarmonics(nn.Module):
         self.res_alpha = res_alpha
 
         self.rtp, self.vsh_irreps = get_change_of_basis_matrix(lmax=lmax)
-        self.to_s2grid = e3nn.o3.ToS2Grid(lmax=lmax, res=(res_beta, res_alpha))
-        self.from_s2grid = e3nn.o3.FromS2Grid(lmax=lmax, res=(res_beta, res_alpha))
+        self.rtp = self.rtp.to(device)
+        self.to_s2grid = e3nn.o3.ToS2Grid(lmax=lmax, res=(res_beta, res_alpha), device=device)
+        self.from_s2grid = e3nn.o3.FromS2Grid(lmax=lmax, res=(res_beta, res_alpha), device=device)
 
     def to_vector_signal(self, vsh_coeffs: torch.Tensor) -> torch.Tensor:
         xyz_coeffs = torch.einsum("ijk,...i->...jk", self.rtp, vsh_coeffs)
