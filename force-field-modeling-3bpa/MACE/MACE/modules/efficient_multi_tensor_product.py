@@ -200,7 +200,7 @@ class GauntTensorProductS2Grid(nn.Module):
         return output
 
 
-# @e3nn.util.jit.compile_mode('trace')
+@e3nn.util.jit.compile_mode('trace')
 class VectorGauntTensorProductS2Grid(nn.Module):
     """S2 grid version of GauntTensorProduct."""
 
