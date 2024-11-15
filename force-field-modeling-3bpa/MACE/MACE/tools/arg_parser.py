@@ -64,6 +64,9 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
                         help='normalization factor for the message',
                         type=bool,
                         default=True)
+    parser.add_argument('--use_s2grid', action=argparse.BooleanOptionalAction, help='use s2grid for Gaunt')
+    parser.add_argument('--use_vector_spherical_harmonics', action=argparse.BooleanOptionalAction, help='use vector spherical harmonics')
+
 
     # Dataset
     parser.add_argument('--dataset',

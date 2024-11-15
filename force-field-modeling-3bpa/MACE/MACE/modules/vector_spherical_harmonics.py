@@ -5,32 +5,43 @@ import torch.nn as nn
 import e3nn
 
 
-def get_change_of_basis_matrix(lmax: int) -> Tuple[torch.Tensor, e3nn.o3.Irreps]:
-    tp = e3nn.o3.ReducedTensorProducts("ij", i="0e + 1o", j=e3nn.o3.Irreps.spherical_harmonics(lmax))
-    return tp.change_of_basis, tp.irreps_out
+def get_change_of_basis_matrix(lmax: int, scalar_interaction: bool, parity: int) -> Tuple[torch.Tensor, e3nn.o3.Irreps]:
+    """Gets change of basis matrix for vector spherical harmonics."""
+    if scalar_interaction:
+        sh_ir = "0e + 1o"
+    else:
+        sh_ir = "1o"
+    tp = e3nn.o3.ReducedTensorProducts("ij", i=sh_ir, j=e3nn.o3.Irreps.spherical_harmonics(lmax))
+
+    irreps = tp.irreps_out
+    if parity == 1:
+        irreps = e3nn.o3.Irreps([(mul, (ir.l, -ir.p)) for mul, ir in irreps])
+    return tp.change_of_basis, irreps
 
 
 class VectorSphericalHarmonics(nn.Module):
     """Barebones implementation of the vector spherical harmonics."""
 
-    def __init__(self, lmax: int, res_beta: int, res_alpha: int, device: Optional[torch.device] = None) -> None:
+    def __init__(self, lmax: int, res_beta: int, res_alpha: int, parity: int, scalar_interaction: bool = True, device: Optional[torch.device] = None) -> None:
+        """Parity -1 for VSH, parity +1 for PVSH."""
+
         super().__init__()
 
         self.lmax = lmax
         self.res_beta = res_beta
         self.res_alpha = res_alpha
 
-        self.rtp, self.vsh_irreps = get_change_of_basis_matrix(lmax=lmax)
+        self.rtp, self.irreps = get_change_of_basis_matrix(lmax=lmax, scalar_interaction=scalar_interaction, parity=parity)
         self.rtp = self.rtp.to(device)
         self.to_s2grid = e3nn.o3.ToS2Grid(lmax=lmax, res=(res_beta, res_alpha), device=device)
         self.from_s2grid = e3nn.o3.FromS2Grid(lmax=lmax, res=(res_beta, res_alpha), device=device)
 
     def to_vector_signal(self, vsh_coeffs: torch.Tensor) -> torch.Tensor:
-        xyz_coeffs = torch.einsum("ijk,...i->...jk", self.rtp, vsh_coeffs)
+        xyz_coeffs = torch.einsum("ijk, ...i -> ...jk", self.rtp, vsh_coeffs)
         vector_signal = self.to_s2grid(xyz_coeffs)
         return vector_signal
 
     def from_vector_signal(self, vector_signal: torch.Tensor) -> torch.Tensor:
         xyz_coeffs = self.from_s2grid(vector_signal)
-        vsh_coeffs = torch.einsum("ijk,...jk->...i", self.rtp, xyz_coeffs)
+        vsh_coeffs = torch.einsum("ijk, ...jk -> ...i", self.rtp, xyz_coeffs)
         return vsh_coeffs

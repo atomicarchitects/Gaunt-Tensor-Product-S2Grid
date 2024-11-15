@@ -638,6 +638,8 @@ class EquivariantNonLinearBodyOrderedModel(torch.nn.Module):
         correlation: int,
         num_radial_coupling: int,
         gate: Callable,
+        use_s2grid: bool,
+        use_vector_spherical_harmonics: bool,
         device: str = "cpu",
     ):
         super().__init__()
@@ -687,6 +689,8 @@ class EquivariantNonLinearBodyOrderedModel(torch.nn.Module):
             use_complex=False,
             use_sc=True,
             device=device,
+            use_s2grid=use_s2grid,
+            use_vector_spherical_harmonics=use_vector_spherical_harmonics,
         )
         self.products = torch.nn.ModuleList([prod])
 
@@ -720,6 +724,8 @@ class EquivariantNonLinearBodyOrderedModel(torch.nn.Module):
                 use_complex=False,
                 use_sc=True,
                 device=device,
+                use_s2grid=use_s2grid,
+                use_vector_spherical_harmonics=use_vector_spherical_harmonics,
             )
             self.products.append(prod)
             if i == num_interactions - 2:

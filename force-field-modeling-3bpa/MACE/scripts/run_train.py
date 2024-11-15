@@ -200,6 +200,8 @@ def main() -> None:
         hidden_irreps=o3.Irreps(args.hidden_irreps),
         atomic_energies=atomic_energies,
         avg_num_neighbors=args.avg_num_neighbors,
+        use_s2grid=args.use_s2grid,
+        use_vector_spherical_harmonics=args.use_vector_spherical_harmonics,
     )
 
     model: torch.nn.Module
