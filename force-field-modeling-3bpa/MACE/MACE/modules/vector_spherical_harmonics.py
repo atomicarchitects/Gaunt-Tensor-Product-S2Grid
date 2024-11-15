@@ -6,7 +6,7 @@ import e3nn
 
 
 def get_change_of_basis_matrix(lmax: int) -> Tuple[torch.Tensor, e3nn.o3.Irreps]:
-    tp = e3nn.o3.ReducedTensorProducts("ij", i="1o", j=e3nn.o3.Irreps.spherical_harmonics(lmax))
+    tp = e3nn.o3.ReducedTensorProducts("ij", i="0e + 1o", j=e3nn.o3.Irreps.spherical_harmonics(lmax))
     return tp.change_of_basis, tp.irreps_out
 
 

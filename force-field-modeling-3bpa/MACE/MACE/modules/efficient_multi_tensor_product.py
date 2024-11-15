@@ -239,7 +239,11 @@ class VectorGauntTensorProductS2Grid(nn.Module):
         input2 = self.linear2(input2)
         input1_signal = self.vsh1.to_vector_signal(input1)
         input2_signal = self.vsh2.to_vector_signal(input2)
-        output_signal = torch.cross(input1_signal, input2_signal, dim=-3)
+        output_signal = torch.concatenate([
+            torch.mul(input1_signal[:, :, :1, :, :], input2_signal[:, :, :1, :, :]),
+            torch.cross(input1_signal[:, :, 1:, :, :], input2_signal[:, :, 1:, :, :], dim=-3),
+        ], dim=-3)
+
         output = self.vsh_out.from_vector_signal(output_signal)
         output = self.linear_out(output)
         return output
