@@ -7,22 +7,23 @@ import e3nn
 
 def get_change_of_basis_matrix(lmax: int, scalar_interaction: bool, parity: int) -> Tuple[torch.Tensor, e3nn.o3.Irreps]:
     """Gets change of basis matrix for vector spherical harmonics."""
+    sh_ir = e3nn.o3.Irreps([(1, (1, parity))])
     if scalar_interaction:
-        sh_ir = "0e + 1o"
-    else:
-        sh_ir = "1o"
+        sh_ir += e3nn.o3.Irreps([(1, (0, -parity))])
     tp = e3nn.o3.ReducedTensorProducts("ij", i=sh_ir, j=e3nn.o3.Irreps.spherical_harmonics(lmax))
 
-    irreps = tp.irreps_out
-    if parity == 1:
-        irreps = e3nn.o3.Irreps([(mul, (ir.l, -ir.p)) for mul, ir in irreps])
-    return tp.change_of_basis, irreps
+    # irreps = 
+    # if parity == 1:
+    #     irreps = e3nn.o3.Irreps([(mul, (ir.l, -ir.p)) for mul, ir in irreps])
+    return tp.change_of_basis, tp.irreps_out
+
+
 
 
 class VectorSphericalHarmonics(nn.Module):
     """Barebones implementation of the vector spherical harmonics."""
 
-    def __init__(self, lmax: int, res_beta: int, res_alpha: int, parity: int, scalar_interaction: bool = True, device: Optional[torch.device] = None) -> None:
+    def __init__(self, lmax: int, res_beta: int, res_alpha: int, parity: int, scalar_interaction: bool, device: Optional[torch.device] = None) -> None:
         """Parity -1 for VSH, parity +1 for PVSH."""
 
         super().__init__()

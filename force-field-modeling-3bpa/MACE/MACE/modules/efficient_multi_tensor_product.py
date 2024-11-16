@@ -12,17 +12,15 @@ from .vector_spherical_harmonics import VectorSphericalHarmonics
 from .efficient_utils import FFT_batch_channel, sh2f_batch_channel, f2sh_batch_channel
 
 current_directory = os.path.dirname(os.path.abspath(__file__))
-sh2f_bases_dict = torch.load(os.path.join(current_directory,"coefficient_sh2f.pt"))
-f2sh_bases_dict = torch.load(os.path.join(current_directory,"coefficient_f2sh.pt"))
+sh2f_bases_dict = torch.load(os.path.join(current_directory, "coefficient_sh2f.pt"))
+f2sh_bases_dict = torch.load(os.path.join(current_directory, "coefficient_f2sh.pt"))
 
 
 def debug(*args):
-    pass
-    # print(*args)
+    print(*args)
 
 
 class EfficientMultiTensorProduct(nn.Module):
-
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -37,12 +35,23 @@ class EfficientMultiTensorProduct(nn.Module):
         self.irreps_out = o3.Irreps(irreps_out)
         self.num_channels = irreps_in.count((0, 1))
         self.num_elements = num_elements
-        self.irreps_in_per_channel = o3.Irreps([(mul // self.num_channels, ir) for mul, ir in self.irreps_in])
-        self.irreps_out_per_channel = o3.Irreps([(mul // self.num_channels, ir) for mul, ir in self.irreps_out])
+        self.irreps_in_per_channel = o3.Irreps(
+            [(mul // self.num_channels, ir) for mul, ir in self.irreps_in]
+        )
+        self.irreps_out_per_channel = o3.Irreps(
+            [(mul // self.num_channels, ir) for mul, ir in self.irreps_out]
+        )
         del irreps_in, irreps_out
         self.correlation = correlation
         self.device = device
-        debug("bro", self.irreps_in, self.irreps_out, self.num_channels, self.correlation, num_elements)
+        debug(
+            "bro",
+            self.irreps_in,
+            self.irreps_out,
+            self.num_channels,
+            self.correlation,
+            num_elements,
+        )
 
         L_in = self.irreps_in.lmax + 1
         L_out = self.irreps_out.lmax + 1
@@ -51,23 +60,30 @@ class EfficientMultiTensorProduct(nn.Module):
 
         self.sh2f_bases = sh2f_bases_dict[L_in].to(device)
         lmaxs = torch.arange(2, correlation + 1) * (L_in - 1)
-        self.f2sh_bases_list = list(map(lambda lmax: f2sh_bases_dict[lmax + 1].to(device), lmaxs.tolist()))
+        self.f2sh_bases_list = list(
+            map(lambda lmax: f2sh_bases_dict[lmax + 1].to(device), lmaxs.tolist())
+        )
         self.offsets_st = lmaxs - L_out + 1
         self.offsets_ed = lmaxs + L_out
 
         def gen_mask(L):
-            left_indices = torch.arange(L, device=device).view(1, -1)  
-            right_indices = torch.arange(L - 2, -1, -1, device=device).view(1, -1)  
-            column_indices = torch.cat((left_indices, right_indices), dim=1).repeat(L, 1)  
-            row_indices = torch.arange(L, device=device).view(-1, 1).repeat(1, 2 * L - 1)  
-            mask = torch.abs(column_indices - (L - 1)) <= row_indices  
+            left_indices = torch.arange(L, device=device).view(1, -1)
+            right_indices = torch.arange(L - 2, -1, -1, device=device).view(1, -1)
+            column_indices = torch.cat((left_indices, right_indices), dim=1).repeat(
+                L, 1
+            )
+            row_indices = (
+                torch.arange(L, device=device).view(-1, 1).repeat(1, 2 * L - 1)
+            )
+            mask = torch.abs(column_indices - (L - 1)) <= row_indices
             mask2D = (torch.ones(L, 2 * L - 1, device=device) * mask).to(bool)
             return mask2D.flatten()
+
         self.mask_i, self.mask_o = list(map(gen_mask, [L_in, L_out]))
 
         slices = 2 * torch.arange(L_out, device=device) + 1
         self.slices = slices.tolist()
-        
+
         self.weights = nn.ParameterDict({})
         for i in range(1, correlation + 1):
             w = nn.Parameter(
@@ -98,54 +114,79 @@ class EfficientMultiTensorProduct(nn.Module):
         # The product of the two is of shape: (B, num_elements, C, num_output_irreps)
         # weights is of shape: (B, C, num_output_irreps, 1) after summing over num_elements
         # feat4D is of shape: (B, C, L_in, 2L_in-1), which gets sliced to (B, C, num_output_irreps, 2num_output_irreps-1)
-    
+
         # Convert from 3D to 4D, so as to facilitate the implementation of Efficient Gaunt TP
         # The time taken by this convert step is minimal
         n_nodes = atom_feat.shape[0]
-        feat3D = torch.zeros(n_nodes, self.num_channels, self.mask_i.shape[0], device=self.device)
+        feat3D = torch.zeros(
+            n_nodes, self.num_channels, self.mask_i.shape[0], device=self.device
+        )
         feat3D[:, :, self.mask_i] = atom_feat
-        feat4D = feat3D.reshape(n_nodes, self.num_channels, self.L_in, -1) # (B, C, L_in, 2L_in-1)
+        feat4D = feat3D.reshape(
+            n_nodes, self.num_channels, self.L_in, -1
+        )  # (B, C, L_in, 2L_in-1)
 
         debug(atom_type[:5])
         debug("feat3D", feat3D.shape)
         debug("feat4D", feat4D.shape)
         for w in self.weights.values():
             debug(w.shape, atom_type.unsqueeze(-1).unsqueeze(-1).shape)
-    
-        # @T.C.: Perform Efficient Gaunt TP  
-        weights = (self.weights["1"] * atom_type.unsqueeze(-1).unsqueeze(-1)).sum(1).unsqueeze(-1) # (B, C, L_out, 1)
-        debug("weights", (self.weights["1"] * atom_type.unsqueeze(-1).unsqueeze(-1)).shape, weights.shape)
-        result = feat4D[:, :, :self.L_out, self.L_in-self.L_out:self.L_in+self.L_out-1] * weights
-        
+
+        # @T.C.: Perform Efficient Gaunt TP
+        weights = (
+            (self.weights["1"] * atom_type.unsqueeze(-1).unsqueeze(-1))
+            .sum(1)
+            .unsqueeze(-1)
+        )  # (B, C, L_out, 1)
+        debug(
+            "weights",
+            (self.weights["1"] * atom_type.unsqueeze(-1).unsqueeze(-1)).shape,
+            weights.shape,
+        )
+        result = (
+            feat4D[
+                :, :, : self.L_out, self.L_in - self.L_out : self.L_in + self.L_out - 1
+            ]
+            * weights
+        )
+
         fs_out = {}
         fs_out[1] = sh2f_batch_channel(feat4D, self.sh2f_bases)
         for nu in range(2, self.correlation + 1):
             if nu % 2 == 0:
-                fs_out[nu] = FFT_batch_channel(fs_out[nu//2], fs_out[nu//2])
+                fs_out[nu] = FFT_batch_channel(fs_out[nu // 2], fs_out[nu // 2])
             else:
-                fs_out[nu] = FFT_batch_channel(fs_out[nu//2], fs_out[nu//2 + 1])
+                fs_out[nu] = FFT_batch_channel(fs_out[nu // 2], fs_out[nu // 2 + 1])
             idx = nu - 2
-            weights = (self.weights[str(nu)] * atom_type.unsqueeze(-1).unsqueeze(-1)).sum(1).unsqueeze(-1)
-            result += weights * f2sh_batch_channel(fs_out[nu], self.f2sh_bases_list[idx]).real[:, :, :self.L_out, self.offsets_st[idx]:self.offsets_ed[idx]]
-        
+            weights = (
+                (self.weights[str(nu)] * atom_type.unsqueeze(-1).unsqueeze(-1))
+                .sum(1)
+                .unsqueeze(-1)
+            )
+            result += (
+                weights
+                * f2sh_batch_channel(fs_out[nu], self.f2sh_bases_list[idx]).real[
+                    :, :, : self.L_out, self.offsets_st[idx] : self.offsets_ed[idx]
+                ]
+            )
 
         # Convert from 4D to 2D, so as to match the original codebase
         # The time taken by this convert step is minimal
         if self.L_out == 1:
-            return  result.squeeze()
+            return result.squeeze()
         else:
             result3D_unfiltered = result.reshape(n_nodes, self.num_channels, -1)
-            result3D = torch.zeros(n_nodes, self.num_channels, self.mask_o.shape[0], device=self.device)
-            result3D = result3D_unfiltered[ :, :, self.mask_o]
+            result3D = torch.zeros(
+                n_nodes, self.num_channels, self.mask_o.shape[0], device=self.device
+            )
+            result3D = result3D_unfiltered[:, :, self.mask_o]
             irreps = torch.split(result3D, self.slices, dim=-1)
             irreps_flatten = list(map(lambda x: x.flatten(start_dim=1), irreps))
             result2D = torch.cat(irreps_flatten, dim=-1)
             return result2D
-        
 
 
-
-@e3nn.util.jit.compile_mode('trace')
+@e3nn.util.jit.compile_mode("trace")
 class GauntTensorProductS2Grid(nn.Module):
     """S2 grid version of GauntTensorProduct."""
 
@@ -184,7 +225,7 @@ class GauntTensorProductS2Grid(nn.Module):
             res=(res_beta, res_alpha),
             device=device,
         )
-    
+
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
         # debug("gs2grid")
         # debug("inputs", input1.shape, input2.shape)
@@ -200,7 +241,37 @@ class GauntTensorProductS2Grid(nn.Module):
         return output
 
 
-@e3nn.util.jit.compile_mode('trace')
+@e3nn.util.jit.compile_mode("trace")
+class ChannelCombiner(nn.Module):
+    """Combines channels of a tensor by reshaping."""
+
+    def __init__(self, irreps_in: e3nn.o3.Irreps, num_channels_to_combine: int):
+        """Combines channels of a tensor by reshaping."""
+
+        super().__init__()
+        self.irreps_in = irreps_in
+        self.irreps_out = num_channels_to_combine * irreps_in
+        self.num_channels_to_combine = num_channels_to_combine
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.reshape(
+            x.shape[:-2]
+            + (
+                x.shape[-2] // self.num_channels_to_combine,
+                self.num_channels_to_combine * self.irreps_in.dim,
+            )
+        )
+        return x
+
+    def uncombine(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.reshape(
+            x.shape[:-2]
+            + (x.shape[-2] * self.num_channels_to_combine, self.irreps_in.dim)
+        )
+        return x
+
+
+@e3nn.util.jit.compile_mode("trace")
 class VectorGauntTensorProductS2Grid(nn.Module):
     """S2 grid version of GauntTensorProduct."""
 
@@ -224,32 +295,63 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             res_beta = 2 * (lmax + 1)
             res_alpha = 2 * lmax + 1
 
-        self.vsh1 = VectorSphericalHarmonics(lmax=self.irreps_in1.lmax - 1, res_beta=res_beta, res_alpha=res_alpha, parity=-1, device=device)
-        self.linear1 = e3nn.o3.Linear(irreps_in=self.irreps_in1, irreps_out=self.vsh1.irreps)
+        self.vsh1 = VectorSphericalHarmonics(
+            lmax=self.irreps_in1.lmax - 1,
+            res_beta=res_beta,
+            res_alpha=res_alpha,
+            parity=-1,
+            scalar_interaction=True,
+            device=device,
+        )
+        self.linear1 = e3nn.o3.Linear(
+            irreps_in=self.irreps_in1, irreps_out=self.vsh1.irreps
+        )
 
-        self.vsh2 = VectorSphericalHarmonics(lmax=self.irreps_in2.lmax - 1, res_beta=res_beta, res_alpha=res_alpha, parity=-1, device=device)
-        self.linear2 = e3nn.o3.Linear(irreps_in=self.irreps_in2, irreps_out=self.vsh2.irreps)
+        self.vsh2 = VectorSphericalHarmonics(
+            lmax=self.irreps_in2.lmax - 1,
+            res_beta=res_beta,
+            res_alpha=res_alpha,
+            parity=-1,
+            scalar_interaction=True,
+            device=device,
+        )
+        self.linear2 = e3nn.o3.Linear(
+            irreps_in=self.irreps_in2, irreps_out=self.vsh2.irreps
+        )
 
-        self.pvsh = VectorSphericalHarmonics(lmax=self.irreps_out.lmax - 1, res_beta=res_beta, res_alpha=res_alpha, parity=+1, device=device)
-        self.linear_out = e3nn.o3.Linear(irreps_in=self.pvsh.irreps, irreps_out=self.irreps_out)
-
+        self.pvsh = VectorSphericalHarmonics(
+            lmax=self.irreps_out.lmax - 1,
+            res_beta=res_beta,
+            res_alpha=res_alpha,
+            parity=+1,
+            scalar_interaction=True,
+            device=device,
+        )
+        self.linear_out = e3nn.o3.Linear(
+            irreps_in=self.pvsh.irreps, irreps_out=self.irreps_out
+        )
 
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
         input1 = self.linear1(input1)
         input2 = self.linear2(input2)
         input1_signal = self.vsh1.to_vector_signal(input1)
         input2_signal = self.vsh2.to_vector_signal(input2)
-        output_signal = torch.concatenate([
-            torch.mul(input1_signal[..., :1, :, :], input2_signal[..., :1, :, :]),
-            torch.cross(input1_signal[..., 1:, :, :], input2_signal[..., 1:, :, :], dim=-3),
-        ], dim=-3)
+        # output_signal = torch.cross(input1_signal, input2_signal, dim=-3)
+        output_signal = torch.concatenate(
+            [
+                torch.mul(input1_signal[..., :1, :, :], input2_signal[..., :1, :, :]),
+                torch.cross(
+                    input1_signal[..., 1:, :, :], input2_signal[..., 1:, :, :], dim=-3
+                ),
+            ],
+            dim=-3,
+        )
         output = self.pvsh.from_vector_signal(output_signal)
         output = self.linear_out(output)
         return output
 
 
 class EfficientMultiTensorProductS2Grid(nn.Module):
-
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -265,8 +367,12 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         self.irreps_out = o3.Irreps(irreps_out)
         self.num_channels = irreps_in.count((0, 1))
         self.num_elements = num_elements
-        self.irreps_in_per_channel = o3.Irreps([(mul // self.num_channels, ir) for mul, ir in self.irreps_in])
-        self.irreps_out_per_channel = o3.Irreps([(mul // self.num_channels, ir) for mul, ir in self.irreps_out])
+        self.irreps_in_per_channel = o3.Irreps(
+            [(mul // self.num_channels, ir) for mul, ir in self.irreps_in]
+        )
+        self.irreps_out_per_channel = o3.Irreps(
+            [(mul // self.num_channels, ir) for mul, ir in self.irreps_out]
+        )
         del irreps_in, irreps_out
         self.correlation = correlation
         self.device = device
@@ -276,13 +382,47 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         self.L_in = L_in
         self.L_out = L_out
 
+        if use_vector_spherical_harmonics:
+            self.num_channels_to_combine = 1
+            assert self.num_channels % self.num_channels_to_combine == 0
+        else:
+            self.num_channels_to_combine = 1
+
+        self.num_channels_after_combine = (
+            self.num_channels // self.num_channels_to_combine
+        )
+
         self.weights = nn.ParameterDict({})
-        self.weight_repeats = torch.concatenate([torch.as_tensor(ir.dim).repeat(mul) for mul, ir in self.irreps_out_per_channel]).to(device)
+        self.weight_repeats = torch.concatenate(
+            [
+                torch.as_tensor(ir.dim).repeat(mul)
+                for mul, ir in self.num_channels_to_combine
+                * self.irreps_out_per_channel
+            ]
+        ).to(device)
         # debug("weight_repeats", self.weight_repeats)
+
+        if use_vector_spherical_harmonics:
+            self.channel_combiner_input = ChannelCombiner(
+                self.irreps_in_per_channel,
+                num_channels_to_combine=self.num_channels_to_combine,
+            )
+            self.channel_combiner_output = ChannelCombiner(
+                self.irreps_out_per_channel,
+                num_channels_to_combine=self.num_channels_to_combine,
+            )
+        else:
+            self.channel_combiner_input = None
+            self.channel_combiner_output = None
 
         for i in range(1, correlation + 1):
             w = nn.Parameter(
-                torch.randn(1, self.num_elements, self.num_channels, self.L_out)
+                torch.randn(
+                    1,
+                    self.num_elements,
+                    self.num_channels_after_combine,
+                    self.num_channels_to_combine * self.L_out,
+                )
             )
             self.weights[str(i)] = w
 
@@ -294,9 +434,13 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         self.tps = nn.ModuleDict({})
         for nu in range(1, correlation):
             self.tps[str(nu)] = tp(
-                irreps_in1=o3.Irreps.spherical_harmonics(nu * self.irreps_in_per_channel.lmax),
-                irreps_in2=self.irreps_in_per_channel,
-                irreps_out=o3.Irreps.spherical_harmonics((nu + 1) * self.irreps_in_per_channel.lmax),
+                irreps_in1=self.num_channels_to_combine
+                * o3.Irreps.spherical_harmonics(nu * self.irreps_in_per_channel.lmax),
+                irreps_in2=self.num_channels_to_combine * self.irreps_in_per_channel,
+                irreps_out=self.num_channels_to_combine
+                * o3.Irreps.spherical_harmonics(
+                    (nu + 1) * self.irreps_in_per_channel.lmax
+                ),
                 device=device,
             )
 
@@ -313,35 +457,50 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
                 irreps_in=[self.irreps_in_per_channel, f"{self.num_elements}x0e"],
                 irreps_out=[self.irreps_out],
             )
-    
+
+        if self.channel_combiner_input is not None:
+            atom_feat = self.channel_combiner_input(atom_feat)
         # atom_feat: (B, C, )
         # debug("inputs", atom_feat.shape, atom_type.shape)
 
         # Perform Efficient Gaunt TP
-        batch_size, num_channels, _ = atom_feat.shape
-        result = torch.zeros((batch_size, num_channels, self.irreps_out_per_channel.dim), device=self.device)
-        # debug("result", result.shape)
+        batch_size, num_channels_after_combine, _ = atom_feat.shape
+        result = torch.zeros(
+            (
+                batch_size,
+                num_channels_after_combine,
+                self.num_channels_to_combine * self.irreps_out_per_channel.dim,
+            ),
+            device=self.device,
+        )
+        # debug("result", result.shape, self.irreps_out_per_channel)
         # debug("irreps_out_per_channel", self.irreps_out_per_channel.dim)
         prod = atom_feat
 
         for nu in range(1, self.correlation + 1):
             # Compute weights for this iteration.
-            weights = (self.weights[str(nu)] * atom_type.unsqueeze(-1).unsqueeze(-1)).sum(1)
+            weights = (
+                self.weights[str(nu)] * atom_type.unsqueeze(-1).unsqueeze(-1)
+            ).sum(1)
             # The weights are of shape: (B, C, self.irreps_out_per_channel.num_irreps)
             # Repeat the weights for each dimension of the output irreps.
             weights = weights.repeat_interleave(self.weight_repeats, dim=-1)
             # The weights are now of shape: (B, C, self.irreps_out_per_channel.output_dim)
 
             # Mix in weights, and add to current result.
-            result += weights * prod[:, :, :result.shape[-1]]
+            result += weights * prod[:, :, : result.shape[-1]]
 
             # Perform product.
             if nu < self.correlation:
                 prod = self.tps[str(nu)](prod, atom_feat)
+
+        # Uncombine channels.
+        if self.channel_combiner_output is not None:
+            result = self.channel_combiner_output.uncombine(result)
+        # debug("result final", result.shape, self.irreps_out_per_channel)
 
         # Convert to 2D.
         irreps = torch.split(result, self.slices, dim=-1)
         irreps_flatten = list(map(lambda x: x.flatten(start_dim=1), irreps))
         result2D = torch.cat(irreps_flatten, dim=-1)
         return result2D
-
