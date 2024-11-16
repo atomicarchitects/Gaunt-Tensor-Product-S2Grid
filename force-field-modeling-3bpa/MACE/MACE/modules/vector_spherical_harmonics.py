@@ -9,7 +9,7 @@ def get_change_of_basis_matrix(lmax: int, scalar_interaction: bool, parity: int)
     """Gets change of basis matrix for vector spherical harmonics."""
     sh_ir = e3nn.o3.Irreps([(1, (1, parity))])
     if scalar_interaction:
-        sh_ir += e3nn.o3.Irreps([(1, (0, -parity))])
+        sh_ir += "0e"
     tp = e3nn.o3.ReducedTensorProducts("ij", i=sh_ir, j=e3nn.o3.Irreps.spherical_harmonics(lmax))
 
     # irreps = 

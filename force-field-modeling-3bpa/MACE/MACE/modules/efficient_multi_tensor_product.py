@@ -295,12 +295,13 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             res_beta = 2 * (lmax + 1)
             res_alpha = 2 * lmax + 1
 
+        self.scalar_interaction = True
         self.vsh1 = VectorSphericalHarmonics(
             lmax=self.irreps_in1.lmax - 1,
             res_beta=res_beta,
             res_alpha=res_alpha,
             parity=-1,
-            scalar_interaction=True,
+            scalar_interaction=self.scalar_interaction,
             device=device,
         )
         self.linear1 = e3nn.o3.Linear(
@@ -312,7 +313,7 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             res_beta=res_beta,
             res_alpha=res_alpha,
             parity=-1,
-            scalar_interaction=True,
+            scalar_interaction=self.scalar_interaction,
             device=device,
         )
         self.linear2 = e3nn.o3.Linear(
@@ -324,7 +325,7 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             res_beta=res_beta,
             res_alpha=res_alpha,
             parity=+1,
-            scalar_interaction=True,
+            scalar_interaction=self.scalar_interaction,
             device=device,
         )
         self.linear_out = e3nn.o3.Linear(
@@ -336,22 +337,28 @@ class VectorGauntTensorProductS2Grid(nn.Module):
         input2 = self.linear2(input2)
         input1_signal = self.vsh1.to_vector_signal(input1)
         input2_signal = self.vsh2.to_vector_signal(input2)
-        # output_signal = torch.cross(input1_signal, input2_signal, dim=-3)
-        output_signal = torch.concatenate(
-            [
-                torch.mul(input1_signal[..., :1, :, :], input2_signal[..., :1, :, :]),
-                torch.cross(
-                    input1_signal[..., 1:, :, :], input2_signal[..., 1:, :, :], dim=-3
-                ),
-            ],
-            dim=-3,
-        )
+
+        if self.scalar_interaction:
+            output_signal = torch.concatenate(
+                [
+                    torch.mul(input1_signal[..., :1, :, :], input2_signal[..., :1, :, :]),
+                    torch.cross(
+                        input1_signal[..., 1:, :, :], input2_signal[..., 1:, :, :], dim=-3
+                    ),
+                ],
+                dim=-3,
+            )
+        else:
+            output_signal = torch.cross(input1_signal, input2_signal, dim=-3)
+
         output = self.pvsh.from_vector_signal(output_signal)
         output = self.linear_out(output)
         return output
 
 
 class EfficientMultiTensorProductS2Grid(nn.Module):
+    """Efficient Multi-Tensor Product with S2 Grid."""
+
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -361,6 +368,7 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         device: str,
         use_vector_spherical_harmonics: bool,
     ):
+        """Efficient Multi-Tensor Product with S2 Grid."""
         super().__init__()
 
         self.irreps_in = o3.Irreps(irreps_in)
