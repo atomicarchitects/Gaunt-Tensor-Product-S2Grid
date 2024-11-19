@@ -66,7 +66,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
                         default=True)
     parser.add_argument('--use_s2grid', action=argparse.BooleanOptionalAction, help='use s2grid for Gaunt')
     parser.add_argument('--use_vector_spherical_harmonics', action=argparse.BooleanOptionalAction, help='use vector spherical harmonics')
-
+    parser.add_argument('--num_channels_to_combine_vsh', help='number of channels to combine in VSH', type=int, default=4)
 
     # Dataset
     parser.add_argument('--dataset',
@@ -108,6 +108,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
                         help='restart optimizer from latest checkpoint',
                         action='store_true',
                         default=False)
+    parser.add_argument('--eval_only', help='evaluate model only', action='store_true', default=False)
     return parser
 
 

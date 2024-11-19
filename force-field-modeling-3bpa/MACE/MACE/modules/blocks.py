@@ -207,6 +207,7 @@ class EquivariantProductBasisBlock(torch.nn.Module):
         correlation: int or Dict[str, int],
         use_s2grid: bool,
         use_vector_spherical_harmonics: bool,
+        num_channels_to_combine_vsh: int,
         element_dependent: bool = True,
         use_complex: bool = False,
         use_sc: bool = True,
@@ -224,6 +225,7 @@ class EquivariantProductBasisBlock(torch.nn.Module):
                 num_elements=num_elements,
                 device=device,
                 use_vector_spherical_harmonics=use_vector_spherical_harmonics,
+                num_channels_to_combine_vsh=num_channels_to_combine_vsh,
             )
         else:
             self.efficient_multi_tensorproduct = EfficientMultiTensorProduct(

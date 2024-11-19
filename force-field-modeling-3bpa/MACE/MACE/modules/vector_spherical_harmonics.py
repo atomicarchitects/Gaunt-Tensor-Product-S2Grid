@@ -15,8 +15,6 @@ def get_change_of_basis_matrix(lmax: int, scalar_interaction: bool, parity: int)
     return tp.change_of_basis, tp.irreps_out
 
 
-
-
 class VectorSphericalHarmonics(nn.Module):
     """Barebones implementation of the vector spherical harmonics."""
 

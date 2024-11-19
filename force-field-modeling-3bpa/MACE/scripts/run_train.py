@@ -202,6 +202,7 @@ def main() -> None:
         avg_num_neighbors=args.avg_num_neighbors,
         use_s2grid=args.use_s2grid,
         use_vector_spherical_harmonics=args.use_vector_spherical_harmonics,
+        num_channels_to_combine_vsh=args.num_channels_to_combine_vsh,
     )
 
     model: torch.nn.Module
@@ -352,23 +353,27 @@ def main() -> None:
     logging.info(f"Number of parameters: {tools.count_parameters(model)}")
     logging.info(f"Optimizer: {optimizer}")
 
-    tools.train(
-        model=model,
-        loss_fn=loss_fn,
-        train_loader=train_loader,
-        valid_loader=valid_loader,
-        optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
-        checkpoint_handler=checkpoint_handler,
-        eval_interval=args.eval_interval,
-        start_epoch=start_epoch,
-        max_num_epochs=args.max_num_epochs,
-        logger=logger,
-        patience=args.patience,
-        device=device,
-        swa=swa,
-        ema=ema,
-    )
+    if args.eval_only:
+        logging.info("Evaluating model only")
+    else:
+        logging.info("Training model")
+        tools.train(
+            model=model,
+            loss_fn=loss_fn,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            checkpoint_handler=checkpoint_handler,
+            eval_interval=args.eval_interval,
+            start_epoch=start_epoch,
+            max_num_epochs=args.max_num_epochs,
+            logger=logger,
+            patience=args.patience,
+            device=device,
+            swa=swa,
+            ema=ema,
+        )
 
     if swa:
         logging.info("Building averaged model")

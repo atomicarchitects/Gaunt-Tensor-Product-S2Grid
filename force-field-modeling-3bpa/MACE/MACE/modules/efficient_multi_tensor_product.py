@@ -17,7 +17,8 @@ f2sh_bases_dict = torch.load(os.path.join(current_directory, "coefficient_f2sh.p
 
 
 def debug(*args):
-    print(*args)
+    pass
+    # print(*args)
 
 
 class EfficientMultiTensorProduct(nn.Module):
@@ -44,14 +45,14 @@ class EfficientMultiTensorProduct(nn.Module):
         del irreps_in, irreps_out
         self.correlation = correlation
         self.device = device
-        debug(
-            "bro",
-            self.irreps_in,
-            self.irreps_out,
-            self.num_channels,
-            self.correlation,
-            num_elements,
-        )
+        # debug(
+        #     "bro",
+        #     self.irreps_in,
+        #     self.irreps_out,
+        #     self.num_channels,
+        #     self.correlation,
+        #     num_elements,
+        # )
 
         L_in = self.irreps_in.lmax + 1
         L_out = self.irreps_out.lmax + 1
@@ -102,8 +103,8 @@ class EfficientMultiTensorProduct(nn.Module):
                 irreps_out=[self.irreps_out],
             )
 
-        debug("irreps_in", self.irreps_in, self.irreps_in.dim)
-        debug("inputs", atom_feat.shape, atom_type.shape)
+        # debug("irreps_in", self.irreps_in, self.irreps_in.dim)
+        # debug("inputs", atom_feat.shape, atom_type.shape)
 
         # inputs are of shape:
         # atom_feat: (B, C, self.irreps_in_per_channel.dim)
@@ -126,11 +127,11 @@ class EfficientMultiTensorProduct(nn.Module):
             n_nodes, self.num_channels, self.L_in, -1
         )  # (B, C, L_in, 2L_in-1)
 
-        debug(atom_type[:5])
-        debug("feat3D", feat3D.shape)
-        debug("feat4D", feat4D.shape)
-        for w in self.weights.values():
-            debug(w.shape, atom_type.unsqueeze(-1).unsqueeze(-1).shape)
+        # debug(atom_type[:5])
+        # debug("feat3D", feat3D.shape)
+        # debug("feat4D", feat4D.shape)
+        # for w in self.weights.values():
+        #     debug(w.shape, atom_type.unsqueeze(-1).unsqueeze(-1).shape)
 
         # @T.C.: Perform Efficient Gaunt TP
         weights = (
@@ -138,11 +139,11 @@ class EfficientMultiTensorProduct(nn.Module):
             .sum(1)
             .unsqueeze(-1)
         )  # (B, C, L_out, 1)
-        debug(
-            "weights",
-            (self.weights["1"] * atom_type.unsqueeze(-1).unsqueeze(-1)).shape,
-            weights.shape,
-        )
+        # debug(
+        #     "weights",
+        #     (self.weights["1"] * atom_type.unsqueeze(-1).unsqueeze(-1)).shape,
+        #     weights.shape,
+        # )
         result = (
             feat4D[
                 :, :, : self.L_out, self.L_in - self.L_out : self.L_in + self.L_out - 1
@@ -245,12 +246,10 @@ class GauntTensorProductS2Grid(nn.Module):
 class ChannelCombiner(nn.Module):
     """Combines channels of a tensor by reshaping."""
 
-    def __init__(self, irreps_in: e3nn.o3.Irreps, num_channels_to_combine: int):
+    def __init__(self, num_channels_to_combine: int):
         """Combines channels of a tensor by reshaping."""
 
         super().__init__()
-        self.irreps_in = irreps_in
-        self.irreps_out = num_channels_to_combine * irreps_in
         self.num_channels_to_combine = num_channels_to_combine
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -258,7 +257,7 @@ class ChannelCombiner(nn.Module):
             x.shape[:-2]
             + (
                 x.shape[-2] // self.num_channels_to_combine,
-                self.num_channels_to_combine * self.irreps_in.dim,
+                self.num_channels_to_combine * x.shape[-1],
             )
         )
         return x
@@ -266,7 +265,10 @@ class ChannelCombiner(nn.Module):
     def uncombine(self, x: torch.Tensor) -> torch.Tensor:
         x = x.reshape(
             x.shape[:-2]
-            + (x.shape[-2] * self.num_channels_to_combine, self.irreps_in.dim)
+            + (
+                x.shape[-2] * self.num_channels_to_combine,
+                x.shape[-1] // self.num_channels_to_combine,
+            )
         )
         return x
 
@@ -283,6 +285,7 @@ class VectorGauntTensorProductS2Grid(nn.Module):
         res_beta: Optional[int] = None,
         res_alpha: Optional[int] = None,
         device: Optional[torch.device] = None,
+        apply_activation: bool = False,
     ):
         super().__init__()
 
@@ -296,6 +299,10 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             res_alpha = 2 * lmax + 1
 
         self.scalar_interaction = True
+        
+        self.linear1 = e3nn.o3.Linear(
+            irreps_in=self.irreps_in1, irreps_out=self.vsh1.irreps
+        )
         self.vsh1 = VectorSphericalHarmonics(
             lmax=self.irreps_in1.lmax - 1,
             res_beta=res_beta,
@@ -304,10 +311,10 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             scalar_interaction=self.scalar_interaction,
             device=device,
         )
-        self.linear1 = e3nn.o3.Linear(
-            irreps_in=self.irreps_in1, irreps_out=self.vsh1.irreps
-        )
 
+        self.linear2 = e3nn.o3.Linear(
+            irreps_in=self.irreps_in2, irreps_out=self.vsh2.irreps
+        )
         self.vsh2 = VectorSphericalHarmonics(
             lmax=self.irreps_in2.lmax - 1,
             res_beta=res_beta,
@@ -316,9 +323,11 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             scalar_interaction=self.scalar_interaction,
             device=device,
         )
-        self.linear2 = e3nn.o3.Linear(
-            irreps_in=self.irreps_in2, irreps_out=self.vsh2.irreps
-        )
+
+        if apply_activation:
+            self.activation = nn.SELU()
+        else:
+            self.activation = None
 
         self.pvsh = VectorSphericalHarmonics(
             lmax=self.irreps_out.lmax - 1,
@@ -334,9 +343,30 @@ class VectorGauntTensorProductS2Grid(nn.Module):
 
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
         input1 = self.linear1(input1)
+        input1 *= 5
         input2 = self.linear2(input2)
+        input2 *= 5
+        print("input1")
+        for ir, slicer in zip(self.linear1.irreps_out, self.linear1.irreps_out.slices()):
+            print(
+                ir,
+                torch.min(input1[..., slicer]).detach().cpu().numpy().round(3),
+                torch.mean(input1[..., slicer]).detach().cpu().numpy().round(3),
+                torch.max(input1[..., slicer]).detach().cpu().numpy().round(3),
+            )
+
+        print("input2")
+        for ir, slicer in zip(self.linear2.irreps_out, self.linear2.irreps_out.slices()):
+            print(
+                ir,
+                torch.min(input2[..., slicer]).detach().cpu().numpy().round(3),
+                torch.mean(input2[..., slicer]).detach().cpu().numpy().round(3),
+                torch.max(input2[..., slicer]).detach().cpu().numpy().round(3),
+            )
+        
         input1_signal = self.vsh1.to_vector_signal(input1)
         input2_signal = self.vsh2.to_vector_signal(input2)
+
 
         if self.scalar_interaction:
             output_signal = torch.concatenate(
@@ -351,7 +381,24 @@ class VectorGauntTensorProductS2Grid(nn.Module):
         else:
             output_signal = torch.cross(input1_signal, input2_signal, dim=-3)
 
+        if self.activation is not None:
+            output_signal = torch.concatenate(
+                [
+                    self.activation(output_signal[..., :1, :, :]),
+                    torch.mul(self.activation(output_signal[..., :1, :, :]), output_signal[..., 1:, :, :]),
+                ],
+                dim=-3,
+            )
+
         output = self.pvsh.from_vector_signal(output_signal)
+        print("output")
+        for ir, slicer in zip(self.pvsh.irreps, self.pvsh.irreps.slices()):
+            print(
+                ir,
+                torch.min(output[..., slicer]).detach().cpu().numpy().round(3),
+                torch.mean(output[..., slicer]).detach().cpu().numpy().round(3),
+                torch.max(output[..., slicer]).detach().cpu().numpy().round(3),
+            )
         output = self.linear_out(output)
         return output
 
@@ -367,6 +414,7 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         num_elements: int,
         device: str,
         use_vector_spherical_harmonics: bool,
+        num_channels_to_combine_vsh: int,
     ):
         """Efficient Multi-Tensor Product with S2 Grid."""
         super().__init__()
@@ -391,7 +439,7 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         self.L_out = L_out
 
         if use_vector_spherical_harmonics:
-            self.num_channels_to_combine = 1
+            self.num_channels_to_combine = num_channels_to_combine_vsh
             assert self.num_channels % self.num_channels_to_combine == 0
         else:
             self.num_channels_to_combine = 1
@@ -404,32 +452,25 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         self.weight_repeats = torch.concatenate(
             [
                 torch.as_tensor(ir.dim).repeat(mul)
-                for mul, ir in self.num_channels_to_combine
-                * self.irreps_out_per_channel
+                for mul, ir in self.irreps_out_per_channel
             ]
         ).to(device)
         # debug("weight_repeats", self.weight_repeats)
 
         if use_vector_spherical_harmonics:
-            self.channel_combiner_input = ChannelCombiner(
-                self.irreps_in_per_channel,
-                num_channels_to_combine=self.num_channels_to_combine,
-            )
-            self.channel_combiner_output = ChannelCombiner(
-                self.irreps_out_per_channel,
+            self.channel_combiner = ChannelCombiner(
                 num_channels_to_combine=self.num_channels_to_combine,
             )
         else:
-            self.channel_combiner_input = None
-            self.channel_combiner_output = None
+            self.channel_combiner = None
 
         for i in range(1, correlation + 1):
             w = nn.Parameter(
                 torch.randn(
                     1,
                     self.num_elements,
-                    self.num_channels_after_combine,
-                    self.num_channels_to_combine * self.L_out,
+                    self.num_channels,
+                    self.L_out,
                 )
             )
             self.weights[str(i)] = w
@@ -466,18 +507,18 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
                 irreps_out=[self.irreps_out],
             )
 
-        if self.channel_combiner_input is not None:
-            atom_feat = self.channel_combiner_input(atom_feat)
+        if self.channel_combiner is not None:
+            atom_feat = self.channel_combiner(atom_feat)
         # atom_feat: (B, C, )
         # debug("inputs", atom_feat.shape, atom_type.shape)
 
         # Perform Efficient Gaunt TP
-        batch_size, num_channels_after_combine, _ = atom_feat.shape
+        batch_size = atom_feat.shape[0]
         result = torch.zeros(
             (
                 batch_size,
-                num_channels_after_combine,
-                self.num_channels_to_combine * self.irreps_out_per_channel.dim,
+                self.num_channels,
+                self.irreps_out_per_channel.dim,
             ),
             device=self.device,
         )
@@ -486,6 +527,8 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         prod = atom_feat
 
         for nu in range(1, self.correlation + 1):
+            print("nu", nu)
+
             # Compute weights for this iteration.
             weights = (
                 self.weights[str(nu)] * atom_type.unsqueeze(-1).unsqueeze(-1)
@@ -496,16 +539,20 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
             # The weights are now of shape: (B, C, self.irreps_out_per_channel.output_dim)
 
             # Mix in weights, and add to current result.
-            result += weights * prod[:, :, : result.shape[-1]]
+            if self.channel_combiner is not None:
+                prod_reshaped = self.channel_combiner.uncombine(prod)
+            else:
+                prod_reshaped = prod
+            prod_reshaped = prod_reshaped[..., :result.shape[-1]]
+            result += weights * prod_reshaped
 
             # Perform product.
             if nu < self.correlation:
                 prod = self.tps[str(nu)](prod, atom_feat)
 
         # Uncombine channels.
-        if self.channel_combiner_output is not None:
-            result = self.channel_combiner_output.uncombine(result)
         # debug("result final", result.shape, self.irreps_out_per_channel)
+        raise NotImplementedError("Uncombine channels")
 
         # Convert to 2D.
         irreps = torch.split(result, self.slices, dim=-1)
