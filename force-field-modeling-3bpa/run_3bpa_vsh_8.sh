@@ -10,7 +10,7 @@ python3 ./MACE/scripts/run_train.py \
     --device=cuda \
     --max_num_epochs=1000 \
     --patience=256 \
-    --name="vsh-activations-3bpa" \
+    --name="vsh-8channel-3bpa" \
     --energy_weight=1.0 \
     --forces_weight=1000.0 \
     --max_ell=3 \
@@ -28,7 +28,6 @@ python3 ./MACE/scripts/run_train.py \
     --amsgrad \
     --use_s2grid \
     --use_vector_spherical_harmonics \
-    --num_channels_to_combine_vsh=4 \
-    --eval_only \
+    --num_channels_to_combine_vsh=8 \
     # --restart_latest \
-    # --amsgrad \
+    # --eval_only \

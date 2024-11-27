@@ -8,9 +8,9 @@ python3 ./MACE/scripts/run_train.py \
     --interaction="RealAgnosticResidualInteractionBlock" \
     --interaction_first="RealAgnosticResidualInteractionBlock" \
     --device=cuda \
-    --max_num_epochs=1000 \
+    --max_num_epochs=2000 \
     --patience=256 \
-    --name="vsh-activations-3bpa" \
+    --name="vsh-4channel-se3-3bpa" \
     --energy_weight=1.0 \
     --forces_weight=1000.0 \
     --max_ell=3 \
@@ -29,6 +29,5 @@ python3 ./MACE/scripts/run_train.py \
     --use_s2grid \
     --use_vector_spherical_harmonics \
     --num_channels_to_combine_vsh=4 \
-    --eval_only \
+    # --eval_only \
     # --restart_latest \
-    # --amsgrad \
