@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -18,10 +18,17 @@ def get_change_of_basis_matrix(lmax: int, scalar_interaction: bool, parity: int)
 class VectorSphericalHarmonics(nn.Module):
     """Barebones implementation of the vector spherical harmonics."""
 
-    def __init__(self, lmax: int, res_beta: int, res_alpha: int, parity: int, scalar_interaction: bool, device: Optional[torch.device] = None) -> None:
+    def __init__(self, lmax: int, res_beta: int, res_alpha: int, parity: Union[int, str], scalar_interaction: bool, device: Optional[torch.device] = None) -> None:
         """Parity -1 for VSH, parity +1 for PVSH."""
-
         super().__init__()
+
+        if isinstance(parity, str):
+            if parity == "pvsh":
+                parity = 1
+            elif parity == "vsh":
+                parity = -1
+            else:
+                raise ValueError(f"Invalid parity: {parity}")
 
         self.lmax = lmax
         self.res_beta = res_beta

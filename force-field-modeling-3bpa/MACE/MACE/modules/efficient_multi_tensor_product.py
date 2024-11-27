@@ -273,6 +273,15 @@ class ChannelCombiner(nn.Module):
         return x
 
 
+def debug_irreps_array(input, irreps):
+    for ir, slicer in zip(irreps, irreps.slices()):
+        print(
+            ir,
+            torch.min(input[..., slicer]).detach().cpu().numpy().round(3),
+            torch.mean(input[..., slicer]).detach().cpu().numpy().round(3),
+            torch.max(input[..., slicer]).detach().cpu().numpy().round(3),
+        )
+
 @e3nn.util.jit.compile_mode("trace")
 class VectorGauntTensorProductS2Grid(nn.Module):
     """S2 grid version of GauntTensorProduct."""
@@ -300,9 +309,6 @@ class VectorGauntTensorProductS2Grid(nn.Module):
 
         self.scalar_interaction = True
         
-        self.linear1 = e3nn.o3.Linear(
-            irreps_in=self.irreps_in1, irreps_out=self.vsh1.irreps
-        )
         self.vsh1 = VectorSphericalHarmonics(
             lmax=self.irreps_in1.lmax - 1,
             res_beta=res_beta,
@@ -311,10 +317,10 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             scalar_interaction=self.scalar_interaction,
             device=device,
         )
-
-        self.linear2 = e3nn.o3.Linear(
-            irreps_in=self.irreps_in2, irreps_out=self.vsh2.irreps
+        self.linear1 = e3nn.o3.Linear(
+            irreps_in=self.irreps_in1, irreps_out=self.vsh1.irreps
         )
+
         self.vsh2 = VectorSphericalHarmonics(
             lmax=self.irreps_in2.lmax - 1,
             res_beta=res_beta,
@@ -322,6 +328,9 @@ class VectorGauntTensorProductS2Grid(nn.Module):
             parity=-1,
             scalar_interaction=self.scalar_interaction,
             device=device,
+        )
+        self.linear2 = e3nn.o3.Linear(
+            irreps_in=self.irreps_in2, irreps_out=self.vsh2.irreps
         )
 
         if apply_activation:
@@ -343,30 +352,16 @@ class VectorGauntTensorProductS2Grid(nn.Module):
 
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
         input1 = self.linear1(input1)
-        input1 *= 5
         input2 = self.linear2(input2)
-        input2 *= 5
-        print("input1")
-        for ir, slicer in zip(self.linear1.irreps_out, self.linear1.irreps_out.slices()):
-            print(
-                ir,
-                torch.min(input1[..., slicer]).detach().cpu().numpy().round(3),
-                torch.mean(input1[..., slicer]).detach().cpu().numpy().round(3),
-                torch.max(input1[..., slicer]).detach().cpu().numpy().round(3),
-            )
 
-        print("input2")
-        for ir, slicer in zip(self.linear2.irreps_out, self.linear2.irreps_out.slices()):
-            print(
-                ir,
-                torch.min(input2[..., slicer]).detach().cpu().numpy().round(3),
-                torch.mean(input2[..., slicer]).detach().cpu().numpy().round(3),
-                torch.max(input2[..., slicer]).detach().cpu().numpy().round(3),
-            )
-        
+        # print("input1")
+        # debug_irreps_array(input1, self.linear1.irreps_out)
+
+        # print("input2")
+        # debug_irreps_array(input2, self.linear2.irreps_out)
+
         input1_signal = self.vsh1.to_vector_signal(input1)
         input2_signal = self.vsh2.to_vector_signal(input2)
-
 
         if self.scalar_interaction:
             output_signal = torch.concatenate(
@@ -384,21 +379,20 @@ class VectorGauntTensorProductS2Grid(nn.Module):
         if self.activation is not None:
             output_signal = torch.concatenate(
                 [
-                    self.activation(output_signal[..., :1, :, :]),
+                    output_signal[..., :1, :, :],
                     torch.mul(self.activation(output_signal[..., :1, :, :]), output_signal[..., 1:, :, :]),
                 ],
                 dim=-3,
             )
 
         output = self.pvsh.from_vector_signal(output_signal)
-        print("output")
-        for ir, slicer in zip(self.pvsh.irreps, self.pvsh.irreps.slices()):
-            print(
-                ir,
-                torch.min(output[..., slicer]).detach().cpu().numpy().round(3),
-                torch.mean(output[..., slicer]).detach().cpu().numpy().round(3),
-                torch.max(output[..., slicer]).detach().cpu().numpy().round(3),
-            )
+
+        # Scale factor due to normalization of VGTP.
+        output *= 100
+
+        # print("output")
+        # debug_irreps_array(output, self.pvsh.irreps)
+
         output = self.linear_out(output)
         return output
 
@@ -481,21 +475,30 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
             tp = GauntTensorProductS2Grid
 
         self.tps = nn.ModuleDict({})
+        input_lmax = self.irreps_in_per_channel.lmax
+
+        def get_irreps(nu):
+            ir = o3.Irreps.spherical_harmonics(
+                nu * input_lmax,
+                p=-1,
+            )
+            ir += o3.Irreps.spherical_harmonics(
+                nu * input_lmax,
+                p=+1,
+            )
+            return ir
+
         for nu in range(1, correlation):
             self.tps[str(nu)] = tp(
-                irreps_in1=self.num_channels_to_combine
-                * o3.Irreps.spherical_harmonics(nu * self.irreps_in_per_channel.lmax),
-                irreps_in2=self.num_channels_to_combine * self.irreps_in_per_channel,
-                irreps_out=self.num_channels_to_combine
-                * o3.Irreps.spherical_harmonics(
-                    (nu + 1) * self.irreps_in_per_channel.lmax
-                ),
+                irreps_in1=self.num_channels_to_combine * get_irreps(nu),
+                irreps_in2=self.num_channels_to_combine * get_irreps(1),
+                irreps_out=self.num_channels_to_combine * get_irreps(nu + 1),
                 device=device,
             )
 
         self.slices = 2 * torch.arange(L_out, device=device) + 1
         self.slices = self.slices.tolist()
-        self.equivarianced_checked = False
+        self.equivarianced_checked = True
 
     def forward(self, atom_feat: torch.tensor, atom_type: torch.Tensor):
         if not self.equivarianced_checked:
@@ -527,8 +530,6 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
         prod = atom_feat
 
         for nu in range(1, self.correlation + 1):
-            print("nu", nu)
-
             # Compute weights for this iteration.
             weights = (
                 self.weights[str(nu)] * atom_type.unsqueeze(-1).unsqueeze(-1)
@@ -552,7 +553,6 @@ class EfficientMultiTensorProductS2Grid(nn.Module):
 
         # Uncombine channels.
         # debug("result final", result.shape, self.irreps_out_per_channel)
-        raise NotImplementedError("Uncombine channels")
 
         # Convert to 2D.
         irreps = torch.split(result, self.slices, dim=-1)
